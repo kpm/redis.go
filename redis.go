@@ -186,9 +186,10 @@ func (client *Client) openConnection() (c net.Conn, err os.Error) {
 func (client *Client) sendCommand(cmd string, args ...string) (data interface{}, err os.Error) {
     // grab a connection from the pool
     c, err := client.popCon()
+    defer client.pushCon(c)
 
     if err != nil {
-        goto End
+        return data, err
     }
 
     b := commandBytes(cmd, args...)
@@ -196,26 +197,28 @@ func (client *Client) sendCommand(cmd string, args ...string) (data interface{},
     if err == os.EOF || err == os.EPIPE {
         c, err = client.openConnection()
         if err != nil {
-            goto End
+            return data, err
         }
 
         data, err = client.rawSend(c, b)
     }
 
-End:
-
-    //add the client back to the queue
-    client.pushCon(c)
-
+    
     return data, err
 }
 
 func (client *Client) sendCommands(cmdArgs <-chan []string, data chan<- interface{}) (err os.Error) {
+
     // grab a connection from the pool
     c, err := client.popCon()
+    // Push nil back onto queue
+		defer client.pushCon(nil)
+
+    // Close client and synchronization issues are a nightmare to solve.
+		defer c.Close()
 
     if err != nil {
-        goto End
+        return err
     }
 
     reader := bufio.NewReader(c)
@@ -228,7 +231,7 @@ func (client *Client) sendCommands(cmdArgs <-chan []string, data chan<- interfac
         // Looks like we have to open a new connection
         c, err = client.openConnection()
         if err != nil {
-            goto End
+            return err
         }
         reader = bufio.NewReader(c)
     } else {
@@ -238,7 +241,7 @@ func (client *Client) sendCommands(cmdArgs <-chan []string, data chan<- interfac
             return RedisError("Unexpected response to PING.")
         }
         if err != nil {
-            goto End
+            return err
         }
     }
 
@@ -271,14 +274,6 @@ func (client *Client) sendCommands(cmdArgs <-chan []string, data chan<- interfac
     for e := range errs {
         err = e
     }
-
-End:
-
-    // Close client and synchronization issues are a nightmare to solve.
-    c.Close()
-
-    // Push nil back onto queue
-    client.pushCon(nil)
 
     return err
 }
